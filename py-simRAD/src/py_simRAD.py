@@ -3,8 +3,8 @@
 Purpose: Perform double restriction digest on a given genome.
 """
 __author__ = "Erick Samera; adapted from Joon Lee"
-__version__ = "1.0.0"
-__comments__ = "stable enough"
+__version__ = "1.1.0"
+__comments__ = "stable enough; more biologically accurate?"
 # --------------------------------------------------
 from argparse import (
     Namespace,
@@ -122,6 +122,33 @@ def _generate_restriction_fragments(slice_positions_arg: list, end_pos_arg: int)
         end_pos = slice_positions_arg[i_pos + 1] if i_pos < len(slice_positions_arg) - 1 else end_pos_arg
         restriction_fragments.append(end_pos - start_pos)
     return restriction_fragments
+def _generate_restriction_fragments2(seq_arg, restriction_enzymes_arg: RestrictionBatch) -> list:
+    """
+    From a list of cutting positions, do the cutting and generate a list of fragment sizes, \
+    but this way is more biologically accurate, technically. It cuts with the first enzyme, \
+    then cuts again with the second enzyme (if applicable).
+
+    Parameters:
+        seq_arg: Seq
+            chromosomal sequence to cut
+        restriction_enzymes_arg: RestrictionBatch
+            a set of enzymes to cut it with
+    
+    Returns:
+        (list)
+            list of restriction restriction fragments of given lengths
+    """
+    enzymes = [i for i in restriction_enzymes_arg]
+    first_restriction = enzymes[0]
+    second_restriction = enzymes[1] if len(enzymes)>1 else None
+    first_pass = first_restriction.catalyse(seq_arg)
+    if second_restriction:
+        second_pass: list = []
+        for fragment in first_pass:
+            second_pass += second_restriction.catalyse(fragment)
+    else:
+        second_pass = first_pass
+    return second_pass
 def _subtract_8_fix(rst_enz_combos_arg: list, fragment_combination_counts_arg: dict) -> dict:
     """
     In at least the total counts, the R implementation of simRAD seems to be off by 8, for some reason. \
@@ -169,34 +196,60 @@ def main() -> None:
         combination_str = '-'.join(list(combination))
         
         for chr in SeqIO.parse(args.input_path, 'fasta'):
+            
+            # switch which implementation
+            biologically_accurate = True
 
-            # get all unique slice positions
-            restriction_batch = RestrictionBatch(list(combination))
-            restriction_result = restriction_batch.search(chr.seq)
-            # using (end - beginning), add 0 position so that first fragment is the entire length from start to that position
-            slice_positions: list = sorted(set([0] + [slice_pos for _, enzyme_slice_list in restriction_result.items() for slice_pos in enzyme_slice_list]))
+            # ignore the mitochrondrial genome, only do nuclear
+            if 'mitochondrion' in chr.description: continue
 
-            # generate "fragments" by cutting between slice positions
-            restriction_fragments = _generate_restriction_fragments(slice_positions, len(chr.seq))
+            if not biologically_accurate:            
+                # get all unique slice positions
+                restriction_batch = RestrictionBatch(list(combination))
+                restriction_result = restriction_batch.search(chr.seq.upper())
+                # using (end - beginning), add 0 position so that first fragment is the entire length from start to that position
+                slice_positions: list = sorted(set([0] + [slice_pos for _, enzyme_slice_list in restriction_result.items() for slice_pos in enzyme_slice_list]))
 
-            # iteratively add fragments to bins and total
-            for fragment_len in restriction_fragments:
-                bin_key = _ceil_round(fragment_len, args.bin_step)
-                bin_keys = [int(key) for key in fragment_combination_counts[combination_str] if str(key).isnumeric()]
-                
-                # if the bin_key is 0, this is probably a mistake
-                if bin_key == 0: continue
-                
-                # count fragments in the correct bin
-                if bin_key in bin_keys:
-                    fragment_combination_counts[combination_str][bin_key] += 1
-                elif bin_key < min(bin_keys):
-                    fragment_combination_counts[combination_str][f'< {bins[0]}'] += 1
-                elif bin_key > min(bin_keys):
-                    fragment_combination_counts[combination_str][f'> {bins[-1]}'] += 1
-                
-                # add to the total
-                fragment_combination_counts[combination_str]['total'] += 1
+                # generate "fragments" by cutting between slice positions
+                restriction_fragments = _generate_restriction_fragments(slice_positions, len(chr.seq))
+
+                # iteratively add fragments to bins and total
+                for fragment_len in restriction_fragments:
+                    bin_key = _ceil_round(fragment_len, args.bin_step)
+                    bin_keys = [int(key) for key in fragment_combination_counts[combination_str] if str(key).isnumeric()]
+                    
+                    # if the bin_key is 0, this is probably a mistake
+                    if bin_key == 0: continue
+                    
+                    # count fragments in the correct bin
+                    if bin_key in bin_keys:
+                        fragment_combination_counts[combination_str][bin_key] += 1
+                    elif bin_key < min(bin_keys):
+                        fragment_combination_counts[combination_str][f'< {bins[0]}'] += 1
+                    elif bin_key > min(bin_keys):
+                        fragment_combination_counts[combination_str][f'> {bins[-1]}'] += 1
+                    
+                    # add to the total
+                    fragment_combination_counts[combination_str]['total'] += 1
+
+            elif biologically_accurate:
+                restriction_enzymes = RestrictionBatch(list(combination))
+                restriction_fragments = _generate_restriction_fragments2(chr.seq, restriction_enzymes)
+
+                for fragment_len in restriction_fragments:
+                    bin_key = _ceil_round(fragment_len, args.bin_step)
+                    bin_keys = [int(key) for key in fragment_combination_counts[combination_str] if str(key).isnumeric()]
+                    
+                    # if the bin_key is 0, this is probably a mistake
+                    if bin_key == 0: continue
+                    
+                    # count fragments in the correct bin
+                    if bin_key in bin_keys:
+                        fragment_combination_counts[combination_str][bin_key] += 1
+                    elif bin_key < min(bin_keys):
+                        fragment_combination_counts[combination_str][f'< {bins[0]}'] += 1
+                    elif bin_key > min(bin_keys):
+                        fragment_combination_counts[combination_str][f'> {bins[-1]}'] += 1
 
     pd.DataFrame.from_dict(fragment_combination_counts, orient='index').to_csv(args.output_path)
 # # --------------------------------------------------
