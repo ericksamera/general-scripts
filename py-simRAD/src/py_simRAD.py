@@ -35,7 +35,7 @@ def get_args() -> Namespace:
         '-o',
         '--out',
         dest='output_path',
-        metavar='DIR',
+        metavar='FILE',
         type=Path,
         required=True,
         help="path of output file (.csv)")
@@ -235,9 +235,10 @@ def main() -> None:
             elif biologically_accurate:
                 restriction_enzymes = RestrictionBatch(list(combination))
                 restriction_fragments = _generate_restriction_fragments2(chr.seq, restriction_enzymes)
+                print(restriction_fragments[:10])
 
-                for fragment_len in restriction_fragments:
-                    bin_key = _ceil_round(fragment_len, args.bin_step)
+                for fragment in restriction_fragments:
+                    bin_key = _ceil_round(len(fragment), args.bin_step)
                     bin_keys = [int(key) for key in fragment_combination_counts[combination_str] if str(key).isnumeric()]
                     
                     # if the bin_key is 0, this is probably a mistake
@@ -250,7 +251,11 @@ def main() -> None:
                         fragment_combination_counts[combination_str][f'< {bins[0]}'] += 1
                     elif bin_key > min(bin_keys):
                         fragment_combination_counts[combination_str][f'> {bins[-1]}'] += 1
+                    
+                    # add to the total
+                    fragment_combination_counts[combination_str]['total'] += 1
 
+    # generate DataFrame output
     pd.DataFrame.from_dict(fragment_combination_counts, orient='index').to_csv(args.output_path)
 # # --------------------------------------------------
 if __name__ == '__main__':
