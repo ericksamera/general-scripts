@@ -3,7 +3,7 @@
 Purpose: Perform double restriction digest on a given genome.
 """
 __author__ = "Erick Samera; adapted from Joon Lee"
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 __comments__ = "stable enough; more biologically accurate?"
 # --------------------------------------------------
 from argparse import (
@@ -12,6 +12,10 @@ from argparse import (
     ArgumentDefaultsHelpFormatter)
 from pathlib import Path
 # --------------------------------------------------
+try:
+    import matplotlib.pyplot as plt
+except ImportError:
+    print('Matplotlib functionality is disabled. Install matplotlib.')
 from itertools import combinations
 from math import ceil, floor
 from Bio import SeqIO
@@ -39,6 +43,14 @@ def get_args() -> Namespace:
         type=Path,
         required=True,
         help="path of output file (.csv)")
+    parser.add_argument(
+        '-O',
+        '--output_hist',
+        dest='output_hist_path',
+        metavar='DIR',
+        type=Path,
+        required=False,
+        help="path of output dir for histogram output")
     
     group_binning_parser = parser.add_argument_group('fragment size binning options')
     group_binning_parser.add_argument(
@@ -72,10 +84,30 @@ def get_args() -> Namespace:
     # --------------------------------------------------
     if args.input_path: args.input_path = args.input_path.resolve()
     if args.output_path: args.output_path = args.output_path.resolve()
+    if args.output_hist_path: args.output_hist_path = args.output_hist_path.resolve()
 
     return args
 # --------------------------------------------------
 def _ceil_round(x, base=100)-> int: return ceil(int(x)/base)*base
+def _generate_histogram(rst_enz_combo_arg: str, restriction_fragments_arg: list, args: Namespace, output_path: Path) -> None:
+    """
+    
+    """
+    bins_arg: range = range(args.bin_min, args.bin_max, args.bin_step)
+
+    fig, ax = plt.subplots(figsize=(9, 5))
+    _, bins, patches = plt.hist([np.clip(restriction_fragments_arg, bins_arg[0], bins_arg[-1])], bins=bins_arg,)
+
+    xlabels = bins[1:].astype(str)
+    xlabels[-1] += '+'
+
+    N_labels = len(xlabels)
+    plt.xlim([0, args.bin_max])
+    plt.xticks(args.bin_step * np.arange(N_labels) + int(args.bin_step/2))
+    ax.set_xticklabels(xlabels)
+    fig.savefig(output_path.joinpath(f'{rst_enz_combo_arg}.png'), dpi=fig.dpi)
+    plt.close()
+    return None
 def _generate_fragment_counts_dict(rst_enz_combos_arg: list, bins_arg: range) -> dict:
     """
     Generates a fragment counts dict:
@@ -145,7 +177,10 @@ def _generate_restriction_fragments2(seq_arg, restriction_enzymes_arg: Restricti
     if second_restriction:
         second_pass: list = []
         for fragment in first_pass:
-            second_pass += second_restriction.catalyse(fragment)
+            # biopython does not consider whether restriction site is at the very ends
+            # for each fragment end, give a buffer of 5 bases for catalysis to be more
+            # accurate
+            second_pass += second_restriction.catalyse(fragment[4:-5])
     else:
         second_pass = first_pass
     return second_pass
@@ -195,6 +230,7 @@ def main() -> None:
     for combination in rst_enz_combinations:
         combination_str = '-'.join(list(combination))
         
+        restriction_fragments_per_combination: list = []
         for chr in SeqIO.parse(args.input_path, 'fasta'):
             
             # switch which implementation
@@ -203,7 +239,7 @@ def main() -> None:
             # ignore the mitochrondrial genome, only do nuclear
             if 'mitochondrion' in chr.description: continue
 
-            if not biologically_accurate:            
+            if not biologically_accurate:
                 # get all unique slice positions
                 restriction_batch = RestrictionBatch(list(combination))
                 restriction_result = restriction_batch.search(chr.seq.upper())
@@ -231,11 +267,11 @@ def main() -> None:
                     
                     # add to the total
                     fragment_combination_counts[combination_str]['total'] += 1
+                restriction_fragments_per_combination += restriction_fragments
 
             elif biologically_accurate:
                 restriction_enzymes = RestrictionBatch(list(combination))
                 restriction_fragments = _generate_restriction_fragments2(chr.seq, restriction_enzymes)
-                print(restriction_fragments[:10])
 
                 for fragment in restriction_fragments:
                     bin_key = _ceil_round(len(fragment), args.bin_step)
@@ -254,7 +290,11 @@ def main() -> None:
                     
                     # add to the total
                     fragment_combination_counts[combination_str]['total'] += 1
+                restriction_fragments_per_combination += [len(fragment) for fragment in restriction_fragments]
 
+        if args.output_hist_path:
+            args.output_hist_path.mkdir(parents=True, exist_ok=True)
+            _generate_histogram(combination_str, restriction_fragments_per_combination, args, args.output_hist_path)
     # generate DataFrame output
     pd.DataFrame.from_dict(fragment_combination_counts, orient='index').to_csv(args.output_path)
 # # --------------------------------------------------
